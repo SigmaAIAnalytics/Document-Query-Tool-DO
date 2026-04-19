@@ -1,6 +1,6 @@
 # SEC Filings RAG
 
-Upload and query SEC 10-K and 8-K filings using Retrieval-Augmented Generation.
+Upload and query SEC 10-K and 8-K filings using Retrieval-Augmented Generation.(https://oyster-app-ya34f.ondigitalocean.app/)
 
 **Stack:** FastAPI · Landing.ai ADE · ChromaDB · Anthropic Claude · React · Tailwind CSS
 
