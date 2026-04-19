@@ -1,32 +1,42 @@
-name: strategy-filings
+name: oyster-app
 region: nyc
 
+features:
+- buildpack-stack=ubuntu-22
+
+alerts:
+- rule: DEPLOYMENT_FAILED
+- rule: DOMAIN_FAILED
+
 services:
-  - name: backend
-    source_dir: .
-    dockerfile_path: Dockerfile
-    http_port: 8000
-    instance_count: 1
-    instance_size_slug: basic-xs
-    envs:
-      - key: LANDING_AI_API_KEY
-        scope: RUN_TIME
-        type: SECRET
-      - key: ANTHROPIC_API_KEY
-        scope: RUN_TIME
-        type: SECRET
-    volumes:
-      - key: data
-        mount_path: /data
-        size_bytes: 5368709120
+- name: document-query-tool-do
+  dockerfile_path: /Dockerfile
+  source_dir: /
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: SigmaAIAnalytics/Document-Query-Tool-DO
+  http_port: 8000
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  routes:
+  - path: /api
+    preserve_path_prefix: false
+  envs:
+  - key: ANTHROPIC_API_KEY
+    scope: RUN_TIME
+    type: SECRET
+  - key: LANDING_AI_API_KEY
+    scope: RUN_TIME
+    type: SECRET
 
 static_sites:
-  - name: frontend
-    source_dir: frontend
-    build_command: npm run build
-    output_dir: dist
-    catchall_document: index.html
-    envs:
-      - key: VITE_API_URL
-        scope: BUILD_TIME
-        value: ${backend.PUBLIC_URL}
+- name: frontend
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: SigmaAIAnalytics/Document-Query-Tool-DO
+  source_dir: frontend
+  build_command: npm run build
+  output_dir: dist
+  catchall_document: index.html
