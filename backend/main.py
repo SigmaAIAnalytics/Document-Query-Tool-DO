@@ -19,6 +19,7 @@ app.include_router(prompts.router, prefix="/prompts", tags=["prompts"])
 app.include_router(query.router, tags=["query"])
 
 
+@app.get("/")
 @app.get("/health")
 def health():
     return {"status": "ok"}
