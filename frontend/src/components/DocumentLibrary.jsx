@@ -40,7 +40,7 @@ export default function DocumentLibrary({ documents, onDeleted, onSelectDoc, sel
       {documents.length === 0 ? (
         <p className="text-xs text-gray-400 text-center py-4">No filings uploaded yet.</p>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
           {documents.map((doc) => (
             <li key={doc.doc_id}>
               <div

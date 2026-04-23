@@ -179,7 +179,7 @@ export default function ChatInterface({ selectedDocId, documents, onCitationClic
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col h-full min-h-[520px] relative">
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col h-full relative">
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
         <h2 className="text-lg font-semibold text-gray-800">Ask the Filings</h2>
