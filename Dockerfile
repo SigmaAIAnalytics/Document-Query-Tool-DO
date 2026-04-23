@@ -21,6 +21,7 @@ ENV CHROMA_PATH=/data/chromadb
 ENV PDF_STORAGE_DIR=/data/uploaded_pdfs
 ENV PROMPTS_DB_PATH=/data/prompts.db
 ENV PARSED_JSON_DIR=/data/parsed_documents
+ENV JOBS_STATE_FILE=/data/jobs_state.json
 
 EXPOSE 8000
 
