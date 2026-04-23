@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { streamQuery, savePrompt } from "../api";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function CitationBadge({ citation, onCitationClick }) {
   return (
@@ -41,6 +42,7 @@ function Message({ msg, onCitationClick }) {
           <p className="whitespace-pre-wrap">{msg.content}</p>
         ) : (
           <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
             components={{
               p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
               strong: ({ children }) => <strong className="font-semibold">{children}</strong>,

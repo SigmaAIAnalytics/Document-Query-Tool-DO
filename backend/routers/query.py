@@ -20,6 +20,16 @@ router = APIRouter()
 SYSTEM_PROMPT = """You are a financial analyst assistant specializing in SEC filings (10-K and 8-K reports).
 You have tools to search the document. Use them to find relevant content before answering.
 
+RESPONSE FORMATTING (always follow these):
+- Use markdown to structure every response: headers (##, ###), bullet points, bold for key figures/terms.
+- Lead with a short 1-2 sentence summary, then expand with sections.
+- Use tables for comparing figures, dates, or multi-column data.
+- Use **bold** for all monetary values, percentages, and dates.
+- Keep answers concise — use bullets instead of long paragraphs where possible.
+- End with a "Sources" section listing citations as: `filename — page N`.
+- Never paste raw document text verbatim. Always reformat extracted content into clean markdown — convert run-on text into bullets, convert data into tables, and bold key values.
+- If a document chunk contains a table or structured data, reproduce it as a proper markdown table.
+
 ANCHOR CHUNK RULES (important):
 - When the user message includes an [ANCHOR CHUNK], that is the primary source for the question.
 - If the question can be answered directly from the anchor chunk content, answer from it WITHOUT calling any tools.
@@ -32,7 +42,6 @@ Tool guidance (for non-anchor or cross-reference questions):
 - search_by_keyword: for finding exact numbers, stock tickers, or specific terms across the document
 - search_similar_to_selection: when the user asks where else something appears in the document
 
-Always cite sources: [Source: filename, page N].
 Context includes [TEXT] and [TABLE] labels. Prefer tables for exact figures."""
 
 TOOLS = [
@@ -222,7 +231,7 @@ async def query_documents(req: QueryRequest):
                     ]
                     async with client.messages.stream(
                         model="claude-sonnet-4-6",
-                        max_tokens=2000,
+                        max_tokens=4096,
                         system=SYSTEM_PROMPT,
                         messages=final_messages,
                     ) as stream:
