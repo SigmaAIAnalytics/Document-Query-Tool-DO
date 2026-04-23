@@ -10,11 +10,29 @@ from services.chroma_client import get_collection
 from services.pdf_renderer import save_pdf
 
 PARSED_DIR = Path(os.getenv("PARSED_JSON_DIR", "./parsed_documents"))
+JOBS_FILE = Path(os.getenv("JOBS_STATE_FILE", "./jobs_state.json"))
 
 router = APIRouter()
 
-# In-memory job state: job_id -> status dict
-_jobs: dict[str, dict] = {}
+
+def _load_jobs() -> dict[str, dict]:
+    if JOBS_FILE.exists():
+        try:
+            return json.loads(JOBS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_jobs(jobs: dict) -> None:
+    try:
+        JOBS_FILE.write_text(json.dumps(jobs, indent=2))
+    except Exception as exc:
+        print(f"[documents] Warning: could not persist job state: {exc}")
+
+
+# Job state persisted to disk so it survives server restarts/reloads
+_jobs: dict[str, dict] = _load_jobs()
 
 
 def _infer_filing_type(filename: str) -> str:
@@ -37,6 +55,7 @@ async def _process_job(
     try:
         _jobs[internal_id]["landing_job_id"] = landing_job_id
         _jobs[internal_id]["status"] = "processing"
+        _save_jobs(_jobs)
 
         result = await poll_job(landing_job_id)
 
@@ -51,6 +70,7 @@ async def _process_job(
 
         if not chunks:
             _jobs[internal_id] = {**_jobs[internal_id], "status": "error", "error": "No text extracted from PDF"}
+            _save_jobs(_jobs)
             return
 
         filing_type = _infer_filing_type(filename)
@@ -95,9 +115,11 @@ async def _process_job(
             "chunk_count": len(chunks),
             "parsed_json": str(json_path),
         }
+        _save_jobs(_jobs)
 
     except Exception as exc:
         _jobs[internal_id] = {**_jobs[internal_id], "status": "error", "error": str(exc)}
+        _save_jobs(_jobs)
 
 
 @router.post("/upload")
@@ -118,6 +140,7 @@ async def upload_document(
 
     internal_id = str(uuid.uuid4())
     _jobs[internal_id] = {"status": "processing", "filename": filename, "landing_job_id": landing_job_id}
+    _save_jobs(_jobs)
 
     asyncio.create_task(_process_job(internal_id, landing_job_id, file_bytes, filename, company_name))
 

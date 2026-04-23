@@ -20,6 +20,7 @@ export async function uploadDocument(file, companyName, onProgress) {
   while (true) {
     await new Promise((r) => setTimeout(r, 5000));
     const statusRes = await fetch(`${BASE}/documents/jobs/${job_id}`);
+    if (statusRes.status === 404) throw new Error("Job not found — the server may have restarted. Please re-upload the file.");
     if (!statusRes.ok) throw new Error("Failed to check job status");
     const job = await statusRes.json();
 
