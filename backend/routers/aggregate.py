@@ -19,16 +19,36 @@ Extract values from the tables provided. The question may ask for ONE value or M
 
 STRICT RULES:
 1. Only use numbers that appear explicitly in the tables. Never estimate or infer.
-2. Emit ONE JSON object per (document, item) pair. If the question asks for 5 tickers, emit up to 5 objects per document.
-3. If a value is not found for a given item in a document, still emit an object with "found": false.
-4. The "label" field names the specific item being extracted (e.g. the ticker symbol or metric name).
-5. Quote the exact cell text in "value" when found.
+2. Call the extract_values tool with one entry per (document, item) pair.
+3. If the question asks for 5 tickers, emit up to 5 entries per document.
+4. If a value is not found for a given item in a document, still emit an entry with found=false.
+5. The label field names the specific item (e.g. ticker symbol or metric name).
+6. Quote the exact cell text in value when found."""
 
-Respond ONLY with a valid JSON array — no prose, no markdown fences. Format:
-[
-  {"filename": "...", "page": 3, "label": "MSTR", "value": "1,000", "found": true},
-  {"filename": "...", "page": null, "label": "STRF", "value": "Not found", "found": false}
-]"""
+EXTRACT_TOOL = {
+    "name": "extract_values",
+    "description": "Return extracted values from SEC filing tables.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "page": {"type": ["integer", "null"]},
+                        "label": {"type": "string"},
+                        "value": {"type": "string"},
+                        "found": {"type": "boolean"},
+                    },
+                    "required": ["filename", "page", "label", "value", "found"],
+                },
+            }
+        },
+        "required": ["results"],
+    },
+}
 
 AGGREGATE_SYSTEM_PROMPT = """You are a precise financial data aggregation assistant working with SEC filings.
 
@@ -121,7 +141,7 @@ async def aggregate(req: AggregateRequest):
             )
 
             # Pass 1: extract values (single call with retry)
-            async def call_with_retry(messages, max_tokens, system, retries=4):
+            async def call_with_retry(messages, max_tokens, system, retries=4, **kwargs):
                 delay = 10
                 for attempt in range(retries):
                     try:
@@ -130,6 +150,7 @@ async def aggregate(req: AggregateRequest):
                             max_tokens=max_tokens,
                             system=system,
                             messages=messages,
+                            **kwargs,
                         )
                     except anthropic.APIStatusError as e:
                         if e.status_code in (429, 529) and attempt < retries - 1:
@@ -139,30 +160,20 @@ async def aggregate(req: AggregateRequest):
                             raise
 
             resp = await call_with_retry(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}",
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "[",
-                    },
-                ],
+                messages=[{
+                    "role": "user",
+                    "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}",
+                }],
                 max_tokens=4096,
                 system=EXTRACT_SYSTEM_PROMPT,
+                tools=[EXTRACT_TOOL],
+                tool_choice={"type": "tool", "name": "extract_values"},
             )
-            raw = "[" + resp.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            try:
-                all_extractions = json.loads(raw)
-                if not isinstance(all_extractions, list):
-                    raise ValueError("Expected JSON array")
-            except Exception as parse_err:
-                preview = raw[:300].replace("\n", " ")
-                yield "data: " + json.dumps({'type': 'error', 'message': f'Extraction parse error: {parse_err} — raw: {preview}'}) + "\n\n"
+            tool_block = next((b for b in resp.content if b.type == "tool_use"), None)
+            if not tool_block:
+                yield "data: " + json.dumps({'type': 'error', 'message': 'Extraction failed: no tool call returned.'}) + "\n\n"
                 return
+            all_extractions = tool_block.input.get("results", [])
 
             # Pass 2: final aggregation (streaming)
             yield "data: " + json.dumps({'type': 'status', 'message': 'Aggregating results…'}) + "\n\n"
