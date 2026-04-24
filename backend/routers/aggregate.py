@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import anthropic
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,10 +13,10 @@ load_dotenv()
 
 router = APIRouter()
 
-# Approx chars per token; keep each batch well under 25k input tokens
-CHARS_PER_TOKEN = 4
-BATCH_TOKEN_LIMIT = 20_000
-BATCH_CHAR_LIMIT = BATCH_TOKEN_LIMIT * CHARS_PER_TOKEN
+# Target ~3k tokens per batch to stay well under the 30k/min rate limit.
+# Add an 8-second pause between batches → max ~7.5 batches/min × 3k = 22.5k tokens/min.
+BATCH_CHAR_LIMIT = 12_000   # ~3k tokens at 4 chars/token
+BATCH_DELAY_SECS = 8
 
 EXTRACT_SYSTEM_PROMPT = """You are a precise financial data extraction assistant working with SEC filings.
 
@@ -138,6 +139,8 @@ async def aggregate(req: AggregateRequest):
             # Pass 1: extract value per document, batch by batch
             all_extractions: list[dict] = []
             for i, batch in enumerate(batches):
+                if i > 0:
+                    await asyncio.sleep(BATCH_DELAY_SECS)
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Extracting values — batch {i+1} of {len(batches)}\u2026'})}\n\n"
                 context = "\n\n".join(_build_doc_context(fn, dc) for fn, dc in batch)
                 resp = await client.messages.create(
