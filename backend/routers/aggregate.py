@@ -12,38 +12,79 @@ load_dotenv()
 
 router = APIRouter()
 
+# Approx chars per token; keep each batch well under 25k input tokens
+CHARS_PER_TOKEN = 4
+BATCH_TOKEN_LIMIT = 20_000
+BATCH_CHAR_LIMIT = BATCH_TOKEN_LIMIT * CHARS_PER_TOKEN
+
+EXTRACT_SYSTEM_PROMPT = """You are a precise financial data extraction assistant working with SEC filings.
+
+Extract a specific value from the tables provided for each document.
+
+STRICT RULES:
+1. Only use numbers that appear explicitly in the tables. Never estimate or infer.
+2. If the value is not found, respond with "Not found" for that document.
+3. If multiple matching values exist in one document, list all of them.
+4. Quote the exact cell text when citing a value.
+
+Respond ONLY with a JSON array, no prose. Format:
+[
+  {"filename": "...", "page": N, "value": "...", "found": true},
+  {"filename": "...", "page": null, "value": "Not found", "found": false}
+]"""
+
 AGGREGATE_SYSTEM_PROMPT = """You are a precise financial data aggregation assistant working with SEC filings.
 
-You will be given ALL table chunks extracted from the document library. Your job is to find and aggregate specific values across documents.
+You will be given extracted values per document. Produce a clean aggregation.
 
-STRICT RULES — follow these exactly, no exceptions:
-1. Only use numbers that appear explicitly in the tables provided. Never estimate, infer, or hallucinate values.
-2. If a value is not found in a document's tables, mark it as "Not found" — never assume it is zero.
-3. Always present a source breakdown FIRST, showing each document and the exact value found, before any total.
-4. Quote the exact cell text from the table when citing a value.
-5. If the same value appears multiple times in one document (e.g. repeated header rows), count it only once.
-6. If the question is ambiguous (e.g. multiple matching columns), list all candidates and ask the user to clarify rather than picking one.
-7. End every response with a confidence note: how many documents contained the value vs. how many were checked.
+STRICT RULES:
+1. Only sum values explicitly provided — never fill in missing ones.
+2. Show the per-document breakdown table first, then the total.
+3. Mark documents where the value was not found clearly.
+4. End with a confidence note: found in N of M documents.
 
 RESPONSE FORMAT:
-## [Question being answered]
+## [Question]
 
 ### Breakdown by Document
-| Document | Page | Value Found |
+| Document | Page | Value |
 |---|---|---|
 | filename | N | $X.X |
-...
+| filename | — | Not found |
 
 ### Total
-**[Total: $X.X]** (found in N of M documents)
+**Total: $X.X** (found in N of M documents)
 
 ### Notes
-- Any caveats, ambiguities, or "not found" items explained here."""
+- Any caveats or ambiguities here."""
 
 
 class AggregateRequest(BaseModel):
     question: str
     doc_id: str | None = None
+
+
+def _build_doc_context(filename: str, doc_chunks: list) -> str:
+    parts = [f"=== {filename} ==="]
+    for c in doc_chunks:
+        parts.append(f"[Page {c.get('page', '?')}]\n{c['text']}")
+    return "\n\n".join(parts)
+
+
+def _batch_documents(doc_groups: dict[str, list]) -> list[list[tuple[str, list]]]:
+    """Split documents into batches that stay within the char limit."""
+    batches, current_batch, current_size = [], [], 0
+    for filename, doc_chunks in doc_groups.items():
+        doc_text = _build_doc_context(filename, doc_chunks)
+        size = len(doc_text)
+        if current_batch and current_size + size > BATCH_CHAR_LIMIT:
+            batches.append(current_batch)
+            current_batch, current_size = [], 0
+        current_batch.append((filename, doc_chunks))
+        current_size += size
+    if current_batch:
+        batches.append(current_batch)
+    return batches
 
 
 @router.post("/aggregate")
@@ -59,30 +100,24 @@ async def aggregate(req: AggregateRequest):
 
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Fetching all tables from library…'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Fetching all tables from library\u2026'})}\n\n"
 
             chunks = get_all_tables(doc_id=req.doc_id)
-
             if not chunks:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No table chunks found in the document library.'})}\n\n"
                 return
 
-            doc_count = len(set(c["filename"] for c in chunks))
-            yield f"data: {json.dumps({'type': 'status', 'message': f'Analysing {len(chunks)} table chunks across {doc_count} documents\u2026'})}\n\n"
-
-            # Build context grouped by document
+            # Group by document
             doc_groups: dict[str, list] = {}
             for c in chunks:
                 doc_groups.setdefault(c["filename"], []).append(c)
 
-            context_parts = []
-            for filename, doc_chunks in doc_groups.items():
-                context_parts.append(f"=== {filename} ===")
-                for c in doc_chunks:
-                    context_parts.append(f"[Page {c.get('page', '?')}]\n{c['text']}")
-            context = "\n\n".join(context_parts)
+            doc_count = len(doc_groups)
+            batches = _batch_documents(doc_groups)
 
-            # Emit citations for every table chunk
+            yield f"data: {json.dumps({'type': 'status', 'message': f'Processing {doc_count} documents in {len(batches)} batch(es)\u2026'})}\n\n"
+
+            # Emit citations
             citations = [
                 {
                     "filename": c["filename"],
@@ -100,22 +135,46 @@ async def aggregate(req: AggregateRequest):
             ]
             yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        f"Here are ALL the table chunks from the document library:\n\n"
-                        f"{context}\n\n---\n\n"
-                        f"Question: {req.question}"
-                    ),
-                }
-            ]
+            # Pass 1: extract value per document, batch by batch
+            all_extractions: list[dict] = []
+            for i, batch in enumerate(batches):
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Extracting values — batch {i+1} of {len(batches)}\u2026'})}\n\n"
+                context = "\n\n".join(_build_doc_context(fn, dc) for fn, dc in batch)
+                resp = await client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=1024,
+                    system=EXTRACT_SYSTEM_PROMPT,
+                    messages=[{
+                        "role": "user",
+                        "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}\n\nReturn JSON only."
+                    }],
+                )
+                raw = resp.content[0].text.strip()
+                # Strip markdown code fences if present
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                try:
+                    batch_results = json.loads(raw)
+                    all_extractions.extend(batch_results)
+                except Exception:
+                    # If JSON parse fails, record as unknown for these docs
+                    for fn, _ in batch:
+                        all_extractions.append({"filename": fn, "page": None, "value": "Parse error", "found": False})
 
+            # Pass 2: final aggregation
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Aggregating results\u2026'})}\n\n"
+            extractions_text = json.dumps(all_extractions, indent=2)
             async with client.messages.stream(
                 model="claude-sonnet-4-6",
-                max_tokens=4096,
+                max_tokens=2048,
                 system=AGGREGATE_SYSTEM_PROMPT,
-                messages=messages,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Question: {req.question}\n\n"
+                        f"Extracted values per document:\n{extractions_text}"
+                    ),
+                }],
             ) as stream:
                 async for text in stream.text_stream:
                     yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
