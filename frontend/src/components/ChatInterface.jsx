@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { streamQuery, savePrompt } from "../api";
+import { streamQuery, streamAggregate, savePrompt } from "../api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -169,6 +169,33 @@ export default function ChatInterface({ selectedDocId, documents, onCitationClic
     }
   };
 
+  const runAggregate = async (question) => {
+    if (!question || loading) return;
+    setError(null);
+    setMessages((prev) => [...prev, { role: "user", content: `[Aggregate] ${question}` }]);
+    const assistantId = Date.now();
+    setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "", citations: [], label: "Aggregate across all documents" }]);
+    setLoading(true);
+
+    try {
+      for await (const chunk of streamAggregate(question, selectedDocId)) {
+        if (chunk.type === "citations") {
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, citations: chunk.citations } : m));
+        } else if (chunk.type === "text") {
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + chunk.text, status: null } : m));
+        } else if (chunk.type === "status") {
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, status: chunk.message } : m));
+        }
+      }
+    } catch (err) {
+      setError(err.message);
+      setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  };
+
   const handleSend = () => {
     const question = input.trim();
     if (!question || loading) return;
@@ -286,6 +313,14 @@ export default function ChatInterface({ selectedDocId, documents, onCitationClic
             className="shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl px-5 py-3 text-sm font-medium transition-colors"
           >
             {loading ? "…" : "Send"}
+          </button>
+          <button
+            onClick={() => { const q = input.trim(); if (q) { setInput(""); runAggregate(q); } }}
+            disabled={!input.trim() || loading}
+            className="shrink-0 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 text-sm font-medium transition-colors"
+            title="Aggregate this value across all documents in the library"
+          >
+            {loading ? "…" : "Aggregate"}
           </button>
         </div>
       </div>

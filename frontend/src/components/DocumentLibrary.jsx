@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { deleteDocument, getSections } from "../api";
+import { deleteDocument, getSections, listParsedDocuments, reindexDocument } from "../api";
 
 const FILING_COLORS = {
   "10-K": "bg-blue-100 text-blue-700",
@@ -12,6 +12,9 @@ export default function DocumentLibrary({ documents, onDeleted, onSelectDoc, sel
   const [sections, setSections] = useState([]);
   const [sectionsLoading, setSectionsLoading] = useState(false);
   const [showSections, setShowSections] = useState(false);
+  const [parsed, setParsed] = useState([]);
+  const [restoring, setRestoring] = useState(null);
+  const [showRestore, setShowRestore] = useState(false);
 
   useEffect(() => {
     if (!selectedDocId) { setSections([]); setShowSections(false); return; }
@@ -22,12 +25,28 @@ export default function DocumentLibrary({ documents, onDeleted, onSelectDoc, sel
       .finally(() => setSectionsLoading(false));
   }, [selectedDocId]);
 
+  useEffect(() => {
+    listParsedDocuments().then(setParsed).catch(() => setParsed([]));
+  }, [documents]);
+
   const handleDelete = async (doc) => {
     if (!window.confirm(`Delete "${doc.filename}"?`)) return;
     setDeleting(doc.doc_id);
     try { await deleteDocument(doc.doc_id); onDeleted?.(); }
     catch (err) { alert(err.message); }
     finally { setDeleting(null); }
+  };
+
+  const handleRestore = async (item) => {
+    setRestoring(item.json_filename);
+    try {
+      await reindexDocument(item.json_filename);
+      onDeleted?.(); // reuse to trigger document list refresh
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setRestoring(null);
+    }
   };
 
   return (
@@ -96,6 +115,38 @@ export default function DocumentLibrary({ documents, onDeleted, onSelectDoc, sel
                   >
                     <span className="text-gray-300 mr-1">p.{s.page + 1}</span>
                     {s.text}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Restore section */}
+      {parsed.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3">
+          <button
+            onClick={() => setShowRestore((v) => !v)}
+            className="text-xs font-semibold text-amber-600 flex items-center gap-1 w-full text-left"
+          >
+            <span>{showRestore ? "▾" : "▸"}</span>
+            <span>Restore removed documents ({parsed.length})</span>
+          </button>
+          {showRestore && (
+            <ul className="mt-2 space-y-1.5 max-h-52 overflow-y-auto pr-1">
+              {parsed.map((item) => (
+                <li key={item.json_filename} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-amber-100 bg-amber-50">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-700 truncate">{item.filename}</p>
+                    <p className="text-xs text-gray-400">{item.filing_type} · {item.has_pdf ? "PDF available" : "no PDF"}</p>
+                  </div>
+                  <button
+                    onClick={() => handleRestore(item)}
+                    disabled={restoring === item.json_filename}
+                    className="shrink-0 text-xs bg-amber-500 hover:bg-amber-600 disabled:bg-gray-300 text-white px-2 py-1 rounded-lg transition-colors"
+                  >
+                    {restoring === item.json_filename ? "Restoring…" : "Restore"}
                   </button>
                 </li>
               ))}

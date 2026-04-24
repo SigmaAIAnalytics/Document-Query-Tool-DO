@@ -43,6 +43,25 @@ export async function deleteDocument(docId) {
   return res.json();
 }
 
+export async function listParsedDocuments() {
+  const res = await fetch(`${BASE}/documents/parsed`);
+  if (!res.ok) throw new Error("Failed to fetch parsed documents");
+  return res.json();
+}
+
+export async function reindexDocument(jsonFilename, companyName = "") {
+  const res = await fetch(`${BASE}/documents/reindex`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ json_filename: jsonFilename, company_name: companyName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Reindex failed");
+  }
+  return res.json();
+}
+
 // Pages
 export function pageImageUrl(docId, page0idx, box, zoom = 2.0) {
   const params = new URLSearchParams({ zoom: String(zoom) });
@@ -133,6 +152,19 @@ async function* _readSSE(res) {
       }
     }
   }
+}
+
+export async function* streamAggregate(question, docId) {
+  const res = await fetch(`${BASE}/aggregate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, doc_id: docId || null }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Aggregation failed");
+  }
+  yield* _readSSE(res);
 }
 
 export async function* streamQuery(question, docId, anchorChunkIds = [], anchorDocIds = []) {

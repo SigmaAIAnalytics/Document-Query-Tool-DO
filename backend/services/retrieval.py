@@ -75,6 +75,18 @@ def search_by_keyword(keyword: str, doc_id: str | None = None) -> list[dict]:
     return _fmt(r.get("ids", []), r.get("documents", []), r.get("metadatas", []))
 
 
+def get_all_tables(doc_id: str | None = None) -> list[dict]:
+    """Fetch every table chunk in the collection — exhaustive, no sampling."""
+    col = get_collection()
+    where = _where(doc_id, {"chunk_type": "table"})
+    if where is None:
+        where = {"chunk_type": "table"}
+    r = col.get(where=where, include=["documents", "metadatas"])
+    chunks = _fmt(r.get("ids", []), r.get("documents", []), r.get("metadatas", []))
+    # Sort by document then page so context is ordered
+    return sorted(chunks, key=lambda c: (c["filename"], c.get("page") or 0))
+
+
 def search_similar_to_chunk(chunk_id: str, doc_id: str | None = None, n: int = 8) -> list[dict]:
     col = get_collection()
     src = col.get(ids=[chunk_id], include=["documents"])
