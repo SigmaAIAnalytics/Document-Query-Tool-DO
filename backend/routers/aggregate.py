@@ -139,14 +139,20 @@ async def aggregate(req: AggregateRequest):
                             raise
 
             resp = await call_with_retry(
-                messages=[{
-                    "role": "user",
-                    "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}\n\nReturn JSON only."
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "[",
+                    },
+                ],
                 max_tokens=4096,
                 system=EXTRACT_SYSTEM_PROMPT,
             )
-            raw = resp.content[0].text.strip()
+            raw = "[" + resp.content[0].text.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             try:
