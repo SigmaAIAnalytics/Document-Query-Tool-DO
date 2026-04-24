@@ -67,7 +67,8 @@ async def aggregate(req: AggregateRequest):
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No table chunks found in the document library.'})}\n\n"
                 return
 
-            yield f"data: {json.dumps({'type': 'status', 'message': f'Analysing {len(chunks)} table chunks across {len(set(c[\"filename\"] for c in chunks))} documents…'})}\n\n"
+            doc_count = len(set(c["filename"] for c in chunks))
+            yield f"data: {json.dumps({'type': 'status', 'message': f'Analysing {len(chunks)} table chunks across {doc_count} documents\u2026'})}\n\n"
 
             # Build context grouped by document
             doc_groups: dict[str, list] = {}
