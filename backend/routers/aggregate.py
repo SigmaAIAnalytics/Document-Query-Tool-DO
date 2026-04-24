@@ -101,7 +101,7 @@ async def aggregate(req: AggregateRequest):
 
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Fetching all tables from library\u2026'})}\n\n"
+            yield "data: " + json.dumps({'type': 'status', 'message': 'Fetching all tables from library…'}) + "\n\n"
 
             chunks = get_all_tables(doc_id=req.doc_id)
             if not chunks:
@@ -116,7 +116,7 @@ async def aggregate(req: AggregateRequest):
             doc_count = len(doc_groups)
             batches = _batch_documents(doc_groups)
 
-            yield f"data: {json.dumps({'type': 'status', 'message': f'Processing {doc_count} documents in {len(batches)} batch(es)\u2026'})}\n\n"
+            yield "data: " + json.dumps({'type': 'status', 'message': f'Processing {doc_count} documents in {len(batches)} batch(es)…'}) + "\n\n"
 
             # Emit citations
             citations = [
@@ -158,7 +158,7 @@ async def aggregate(req: AggregateRequest):
             for i, batch in enumerate(batches):
                 if i > 0:
                     await asyncio.sleep(BATCH_DELAY_SECS)
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Extracting values — batch {i+1} of {len(batches)}\u2026'})}\n\n"
+                yield "data: " + json.dumps({'type': 'status', 'message': f'Extracting values — batch {i+1} of {len(batches)}…'}) + "\n\n"
                 context = "\n\n".join(_build_doc_context(fn, dc) for fn, dc in batch)
                 resp = await call_with_retry(
                     messages=[{
@@ -179,7 +179,7 @@ async def aggregate(req: AggregateRequest):
                         all_extractions.append({"filename": fn, "page": None, "value": "Parse error", "found": False})
 
             # Pass 2: final aggregation
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Aggregating results\u2026'})}\n\n"
+            yield "data: " + json.dumps({'type': 'status', 'message': 'Aggregating results…'}) + "\n\n"
             extractions_text = json.dumps(all_extractions, indent=2)
             agg_delay = 10
             for attempt in range(4):
@@ -201,7 +201,7 @@ async def aggregate(req: AggregateRequest):
                     break
                 except anthropic.APIStatusError as e:
                     if e.status_code in (429, 529) and attempt < 3:
-                        yield f"data: {json.dumps({'type': 'status', 'message': f'API busy, retrying in {agg_delay}s\u2026'})}\n\n"
+                        yield "data: " + json.dumps({'type': 'status', 'message': f'API busy, retrying in {agg_delay}s…'}) + "\n\n"
                         await asyncio.sleep(agg_delay)
                         agg_delay *= 2
                     else:
