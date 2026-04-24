@@ -20,44 +20,46 @@ BATCH_DELAY_SECS = 8
 
 EXTRACT_SYSTEM_PROMPT = """You are a precise financial data extraction assistant working with SEC filings.
 
-Extract a specific value from the tables provided for each document.
+Extract values from the tables provided. The question may ask for ONE value or MULTIPLE values (e.g. several ticker symbols or line items).
 
 STRICT RULES:
 1. Only use numbers that appear explicitly in the tables. Never estimate or infer.
-2. If the value is not found, respond with "Not found" for that document.
-3. If multiple matching values exist in one document, list all of them.
-4. Quote the exact cell text when citing a value.
+2. Emit ONE JSON object per (document, item) pair. If the question asks for 5 tickers, emit up to 5 objects per document.
+3. If a value is not found for a given item in a document, still emit an object with "found": false.
+4. The "label" field names the specific item being extracted (e.g. the ticker symbol or metric name).
+5. Quote the exact cell text in "value" when found.
 
-Respond ONLY with a JSON array, no prose. Format:
+Respond ONLY with a valid JSON array — no prose, no markdown fences. Format:
 [
-  {"filename": "...", "page": N, "value": "...", "found": true},
-  {"filename": "...", "page": null, "value": "Not found", "found": false}
+  {"filename": "...", "page": 3, "label": "MSTR", "value": "1,000", "found": true},
+  {"filename": "...", "page": null, "label": "STRF", "value": "Not found", "found": false}
 ]"""
 
 AGGREGATE_SYSTEM_PROMPT = """You are a precise financial data aggregation assistant working with SEC filings.
 
-You will be given extracted values per document. Produce a clean aggregation.
+You will be given extracted values per (document, label) pair. Produce a clean aggregation grouped by label.
 
 STRICT RULES:
-1. Only sum values explicitly provided — never fill in missing ones.
-2. Show the per-document breakdown table first, then the total.
-3. Mark documents where the value was not found clearly.
-4. End with a confidence note: found in N of M documents.
+1. Only sum values that were explicitly found — never fill in missing ones.
+2. Strip commas and currency symbols before summing numeric strings (e.g. "1,000" → 1000).
+3. Show a per-document breakdown table for each label, then a grand total row.
+4. Mark documents where the value was not found clearly.
+5. End each section with a confidence note: found in N of M documents.
 
-RESPONSE FORMAT:
-## [Question]
+RESPONSE FORMAT (repeat the ### section for each label):
 
-### Breakdown by Document
+## Results
+
+### LABEL_NAME
 | Document | Page | Value |
 |---|---|---|
-| filename | N | $X.X |
+| filename | 3 | 1,000 |
 | filename | — | Not found |
 
-### Total
-**Total: $X.X** (found in N of M documents)
+**Total: X** (found in N of M documents)
 
 ### Notes
-- Any caveats or ambiguities here."""
+- Any caveats, unit ambiguities, or duplicates here."""
 
 
 class AggregateRequest(BaseModel):
@@ -165,7 +167,7 @@ async def aggregate(req: AggregateRequest):
                         "role": "user",
                         "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}\n\nReturn JSON only."
                     }],
-                    max_tokens=1024,
+                    max_tokens=4096,
                     system=EXTRACT_SYSTEM_PROMPT,
                 )
                 raw = resp.content[0].text.strip()
@@ -173,10 +175,14 @@ async def aggregate(req: AggregateRequest):
                     raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                 try:
                     batch_results = json.loads(raw)
+                    if not isinstance(batch_results, list):
+                        raise ValueError("Expected JSON array")
                     all_extractions.extend(batch_results)
-                except Exception:
+                except Exception as parse_err:
+                    preview = raw[:200].replace("\n", " ")
+                    yield "data: " + json.dumps({'type': 'status', 'message': f'Batch {i+1} parse error: {parse_err} — raw: {preview}'}) + "\n\n"
                     for fn, _ in batch:
-                        all_extractions.append({"filename": fn, "page": None, "value": "Parse error", "found": False})
+                        all_extractions.append({"filename": fn, "page": None, "label": "unknown", "value": "Parse error", "found": False})
 
             # Pass 2: final aggregation
             yield "data: " + json.dumps({'type': 'status', 'message': 'Aggregating results…'}) + "\n\n"
