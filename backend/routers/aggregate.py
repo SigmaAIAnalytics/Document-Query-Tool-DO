@@ -137,50 +137,75 @@ async def aggregate(req: AggregateRequest):
             yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
 
             # Pass 1: extract value per document, batch by batch
+            async def call_with_retry(messages, max_tokens, system, retries=4):
+                delay = 10
+                for attempt in range(retries):
+                    try:
+                        return await client.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=max_tokens,
+                            system=system,
+                            messages=messages,
+                        )
+                    except anthropic.APIStatusError as e:
+                        if e.status_code in (429, 529) and attempt < retries - 1:
+                            await asyncio.sleep(delay)
+                            delay *= 2
+                        else:
+                            raise
+
             all_extractions: list[dict] = []
             for i, batch in enumerate(batches):
                 if i > 0:
                     await asyncio.sleep(BATCH_DELAY_SECS)
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Extracting values — batch {i+1} of {len(batches)}\u2026'})}\n\n"
                 context = "\n\n".join(_build_doc_context(fn, dc) for fn, dc in batch)
-                resp = await client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=1024,
-                    system=EXTRACT_SYSTEM_PROMPT,
+                resp = await call_with_retry(
                     messages=[{
                         "role": "user",
                         "content": f"Tables:\n\n{context}\n\n---\n\nQuestion: {req.question}\n\nReturn JSON only."
                     }],
+                    max_tokens=1024,
+                    system=EXTRACT_SYSTEM_PROMPT,
                 )
                 raw = resp.content[0].text.strip()
-                # Strip markdown code fences if present
                 if raw.startswith("```"):
                     raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                 try:
                     batch_results = json.loads(raw)
                     all_extractions.extend(batch_results)
                 except Exception:
-                    # If JSON parse fails, record as unknown for these docs
                     for fn, _ in batch:
                         all_extractions.append({"filename": fn, "page": None, "value": "Parse error", "found": False})
 
             # Pass 2: final aggregation
             yield f"data: {json.dumps({'type': 'status', 'message': 'Aggregating results\u2026'})}\n\n"
             extractions_text = json.dumps(all_extractions, indent=2)
-            async with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=2048,
-                system=AGGREGATE_SYSTEM_PROMPT,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Question: {req.question}\n\n"
-                        f"Extracted values per document:\n{extractions_text}"
-                    ),
-                }],
-            ) as stream:
-                async for text in stream.text_stream:
-                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+            agg_delay = 10
+            for attempt in range(4):
+                try:
+                    async with client.messages.stream(
+                        model="claude-sonnet-4-6",
+                        max_tokens=2048,
+                        system=AGGREGATE_SYSTEM_PROMPT,
+                        messages=[{
+                            "role": "user",
+                            "content": (
+                                f"Question: {req.question}\n\n"
+                                f"Extracted values per document:\n{extractions_text}"
+                            ),
+                        }],
+                    ) as stream:
+                        async for text in stream.text_stream:
+                            yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+                    break
+                except anthropic.APIStatusError as e:
+                    if e.status_code in (429, 529) and attempt < 3:
+                        yield f"data: {json.dumps({'type': 'status', 'message': f'API busy, retrying in {agg_delay}s\u2026'})}\n\n"
+                        await asyncio.sleep(agg_delay)
+                        agg_delay *= 2
+                    else:
+                        raise
 
             yield "data: [DONE]\n\n"
 
